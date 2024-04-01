@@ -73,20 +73,6 @@ io.on('connection', (socket) => {
         console.log(waitingCount2);
         console.log(client);
     });
-    // socket.on('disconnect', async () => {
-    //     console.log("it is here in disconnect");
-    //     const idChat = idChatToSocketMap[socket.id];
-    //     if (idChat) {
-    //         const idChatString = JSON.stringify(idChat);
-    //         const queueKey = 'waitingUsers';
-    //         // Remove the user from the Redis queue
-    //         await client.lRem(queueKey, 1, idChatString);
-    //         console.log(`Removed user ${idChat.idchat} from queue`);
-    //
-    //         // Clean up the local map
-    //         delete idChatToSocketMap[socket.id];
-    //     }
-    // });
 
     socket.on('disconnect', async () => {
         console.log("it is in the disconnect");
@@ -129,7 +115,6 @@ async function addToQueueIfNotExists(idChat) {
     }
 }
 
-// Set the port and start the server
 const PORT = process.env.PORT || 3002;
 server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
