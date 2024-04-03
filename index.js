@@ -1,6 +1,7 @@
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
+const mongoose = require('mongoose');
 
 // Create a new express application
 const app = express();
@@ -11,8 +12,21 @@ const server = http.createServer(app);
 
 // Attach socket.io to the server
 const io = socketIo(server);
+mongoose.connect('mongodb://localhost/testmongo', {useNewUrlParser: true, useUnifiedTopology: true})
+    .then(() => console.log('Connected to MongoDB...'))
+    .catch(err => console.error('Could not connect to MongoDB...', err));
 
 const redis = require('redis');
+
+
+const chatPartnerSchema = new mongoose.Schema({
+    firstUserId: String,
+    secondUserId: String,
+    whenTheyEnd: Date
+});
+
+const ChatPartner = mongoose.model('ChatPartner', chatPartnerSchema);
+
 
 const client = redis.createClient({
     url: 'redis://localhost:6379' // Default host and port
@@ -28,18 +42,21 @@ app.use(express.static('public'));
 
 // Handle WebSocket connections
 io.on('connection', (socket) => {
-    console.log('A user connected');
     socket.on('requestChat', async (data) => {
 
-        console.log("this is the data from all queue");
-        try {
-            const queue = await client.lRange("waitingUsers", 0, -1); // Retrieve the entire queue
-            const deserializedQueue = queue.map(item => JSON.parse(item)); // Deserialize each item
-            console.log(deserializedQueue); // Send the deserialized queue as JSON
-        } catch (error) {
-            console.error('Error retrieving queue:', error);
-        }
-        console.log("this is the data from all queue");
+        console.log("+++++++++++++++who is actively chatting with who+++++++++++++++++++++++++++");
+        await fetchActiveChatSessions()
+        console.log("+++++++++++++++who is actively chatting with who+++++++++++++++++++++++++++");
+
+        // console.log("this is the data from all queue");
+        // try {
+        //     const queue = await client.lRange("waitingUsers", 0, -1); // Retrieve the entire queue
+        //     const deserializedQueue = queue.map(item => JSON.parse(item)); // Deserialize each item
+        //     console.log(deserializedQueue); // Send the deserialized queue as JSON
+        // } catch (error) {
+        //     console.error('Error retrieving queue:', error);
+        // }
+        // console.log("this is the data from all queue");
 
 
         if (data) {
@@ -47,9 +64,23 @@ io.on('connection', (socket) => {
             socketIdToIdChatMap[socket.id] = data.idchat;
             const waitingCount = await client.lLen('waitingUsers');
             if (waitingCount > 0) {
-                console.log("there is a user in the pop");
+                console.log("there is a user in the pop-------------");
                 // Pop the first waiting user's idChat object from the queue
                 const partnerIdChat = await client.lPop('waitingUsers');
+
+                //need to check them for the connecting and logging
+                const requesterIdChat = data.idchat;
+
+                const sessionKeyUser1 = `chatSession:${partnerIdChat}`;
+                const sessionKeyUser2 = `chatSession:${requesterIdChat}`;
+                await client.set(sessionKeyUser1, requesterIdChat);
+                await client.set(sessionKeyUser2, JSON.parse(partnerIdChat));
+                //need to check them for the connecting and logging
+
+                // this await part is for that i can see which user is talking to which
+                await fetchActiveChatSessions()
+                // this await part is for that i can see which user is talking to which
+
                 console.log(partnerIdChat);
                 console.log("there is a user in the pop");
                 // Retrieve sockets using idChat from your method of mapping
@@ -87,10 +118,44 @@ io.on('connection', (socket) => {
             // Clean up both mappings
             delete idChatToSocketMap[idChatId];
             delete socketIdToIdChatMap[socket.id];
+
+
+            //delete the session for that they chat with each other
+
+            const sessionKey = `chatSession:${idChatId}`;
+            console.log("this is the session key");
+            console.log(sessionKey);
+            console.log("this is the session key");
+            const partnerIdChat = await client.get(sessionKey);
+
+            if (partnerIdChat) {
+                // Notify the chat partner if necessary
+                const partnerSocket = idChatToSocketMap[partnerIdChat];
+                if (partnerSocket) {
+                    partnerSocket.emit('chatPartnerDisconnected', { message: 'Your chat partner has disconnected.' });
+                }
+
+                // Delete both users' chat session keys from Redis
+                await client.del(sessionKey);
+                const partnerSessionKey = `chatSession:${partnerIdChat}`;
+                await client.del(partnerSessionKey);
+
+                const chatSession = new ChatPartner({
+                    firstUserId: idChatId,
+                    secondUserId: partnerIdChat,
+                    whenTheyEnd: new Date() // Current time as end time
+                });
+
+                 chatSession.save();
+
+            }
+
+
+
+
         }
     });
 });
-
 
 
 async function addToQueueIfNotExists(idChat) {
@@ -114,6 +179,20 @@ async function addToQueueIfNotExists(idChat) {
         console.log('User already in queue:', idChat.idchat);
     }
 }
+
+async function fetchActiveChatSessions() {
+    const sessionKeys = await client.keys('chatSession:*');
+    const sessions = {};
+
+    for (const key of sessionKeys) {
+        const partnerIdChat = await client.get(key);
+        const userIdChat = key.split(':')[1]; // Assuming the key format is "chatSession:idChat.idchat"
+        sessions[userIdChat] = partnerIdChat;
+    }
+    console.log(sessions);
+    return sessions;
+}
+
 
 const PORT = process.env.PORT || 3002;
 server.listen(PORT, () => {
