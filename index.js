@@ -48,16 +48,6 @@ io.on('connection', (socket) => {
         await fetchActiveChatSessions()
         console.log("+++++++++++++++who is actively chatting with who+++++++++++++++++++++++++++");
 
-        // console.log("this is the data from all queue");
-        // try {
-        //     const queue = await client.lRange("waitingUsers", 0, -1); // Retrieve the entire queue
-        //     const deserializedQueue = queue.map(item => JSON.parse(item)); // Deserialize each item
-        //     console.log(deserializedQueue); // Send the deserialized queue as JSON
-        // } catch (error) {
-        //     console.error('Error retrieving queue:', error);
-        // }
-        // console.log("this is the data from all queue");
-
 
         if (data) {
             idChatToSocketMap[data.idchat] = socket;
@@ -105,6 +95,28 @@ io.on('connection', (socket) => {
         console.log(client);
     });
 
+
+    socket.on('chatMessage', async (message) => {
+        console.log("it is in the chat message");
+        const {senderIdChat, content} = message; // Assuming message has sender ID and content
+        // Retrieve the sender's chat partner from Redis
+        const sessionKey = `chatSession:${senderIdChat}`;
+        const receiverIdChat = await client.get(sessionKey);
+        if (receiverIdChat) {
+            // Retrieve the receiver's socket ID from the mapping
+            const receiverSocketId = idChatToSocketMap[receiverIdChat];
+            if (receiverSocketId) {
+                // Forward the message to the receiver
+                io.to(receiverSocketId.id).emit('chaM', {from: senderIdChat, content});
+            } else {
+                console.log('Receiver socket not found. It might be disconnected.');
+            }
+        } else {
+            console.log('Chat session not found or already ended.');
+        }
+    });
+
+
     socket.on('disconnect', async () => {
         console.log("it is in the disconnect");
         const idChatId = socketIdToIdChatMap[socket.id];
@@ -132,7 +144,7 @@ io.on('connection', (socket) => {
                 // Notify the chat partner if necessary
                 const partnerSocket = idChatToSocketMap[partnerIdChat];
                 if (partnerSocket) {
-                    partnerSocket.emit('chatPartnerDisconnected', { message: 'Your chat partner has disconnected.' });
+                    partnerSocket.emit('chatPartnerDisconnected', {message: 'Your chat partner has disconnected.'});
                 }
 
                 // Delete both users' chat session keys from Redis
@@ -146,13 +158,9 @@ io.on('connection', (socket) => {
                     whenTheyEnd: new Date() // Current time as end time
                 });
 
-                 chatSession.save();
+                chatSession.save();
 
             }
-
-
-
-
         }
     });
 });
