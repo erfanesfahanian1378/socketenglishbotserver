@@ -3,6 +3,8 @@ const http = require('http');
 const socketIo = require('socket.io');
 const mongoose = require('mongoose');
 
+
+
 // Create a new express application
 const app = express();
 let waitingUsers = [];
@@ -25,7 +27,16 @@ const chatPartnerSchema = new mongoose.Schema({
     whenTheyEnd: Date
 });
 
+const chatMessagesSchema = new mongoose.Schema({
+    firstUserId: String,
+    secondUserId: String,
+    content: String,
+    data: Date
+});
+
+
 const ChatPartner = mongoose.model('ChatPartner', chatPartnerSchema);
+const ChatMessages = mongoose.model('ChatMessage', chatMessagesSchema);
 
 
 const client = redis.createClient({
@@ -97,11 +108,17 @@ io.on('connection', (socket) => {
 
 
     socket.on('chatMessage', async (message) => {
-        console.log("it is in the chat message");
         const {senderIdChat, content} = message; // Assuming message has sender ID and content
         // Retrieve the sender's chat partner from Redis
         const sessionKey = `chatSession:${senderIdChat}`;
         const receiverIdChat = await client.get(sessionKey);
+        const chatMessage = new ChatMessages({
+            firstUserId: senderIdChat,
+            secondUserId: receiverIdChat,
+            content: content,
+            data: Date.now()
+        });
+        chatMessage.save();
         if (receiverIdChat) {
             // Retrieve the receiver's socket ID from the mapping
             const receiverSocketId = idChatToSocketMap[receiverIdChat];
@@ -118,7 +135,6 @@ io.on('connection', (socket) => {
 
 
     socket.on('disconnect', async () => {
-        console.log("it is in the disconnect");
         const idChatId = socketIdToIdChatMap[socket.id];
         if (idChatId) {
             const queueKey = 'waitingUsers';
@@ -130,10 +146,55 @@ io.on('connection', (socket) => {
             // Clean up both mappings
             delete idChatToSocketMap[idChatId];
             delete socketIdToIdChatMap[socket.id];
-
-
             //delete the session for that they chat with each other
+            const sessionKey = `chatSession:${idChatId}`;
+            console.log("this is the session key");
+            console.log(sessionKey);
+            console.log("this is the session key");
+            const partnerIdChat = await client.get(sessionKey);
 
+            if (partnerIdChat) {
+                // Notify the chat partner if necessary
+                const partnerSocket = idChatToSocketMap[partnerIdChat];
+                if (partnerSocket) {
+                    partnerSocket.emit('chatPartnerDisconnected', {message: 'Your chat partner has disconnected.'});
+                }
+
+                // Delete both users' chat session keys from Redis
+                await client.del(sessionKey);
+                const partnerSessionKey = `chatSession:${partnerIdChat}`;
+                await client.del(partnerSessionKey);
+
+                const chatSession = new ChatPartner({
+                    firstUserId: idChatId,
+                    secondUserId: partnerIdChat,
+                    whenTheyEnd: new Date() // Current time as end time
+                });
+
+                chatSession.save();
+
+            }
+        }
+    });
+
+
+    socket.on('disconnect2', async (data) => {
+        const {senderIdChat} = data;
+        const idChatId = senderIdChat
+        console.log("this is the idChat");
+        console.log(idChatId);
+        console.log("this is the idChat");
+        if (idChatId) {
+            const queueKey = 'waitingUsers';
+            // Serialize the identifier the same way as when you added it
+            const idChatStringToRemove = JSON.stringify(idChatId);
+            await client.lRem(queueKey, 1, idChatStringToRemove);
+            console.log(`Removed user ${idChatId} from queue`);
+
+            // Clean up both mappings
+            delete idChatToSocketMap[idChatId];
+            delete socketIdToIdChatMap[socket.id];
+            //delete the session for that they chat with each other
             const sessionKey = `chatSession:${idChatId}`;
             console.log("this is the session key");
             console.log(sessionKey);
@@ -200,6 +261,7 @@ async function fetchActiveChatSessions() {
     console.log(sessions);
     return sessions;
 }
+
 
 
 const PORT = process.env.PORT || 3002;
