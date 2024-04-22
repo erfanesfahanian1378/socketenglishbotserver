@@ -63,6 +63,10 @@ io.on('connection', (socket) => {
         if (data) {
             idChatToSocketMap[data.idchat] = socket;
             socketIdToIdChatMap[socket.id] = data.idchat;
+            const userLevel = data.level;
+            console.log("this is user level");
+            console.log(userLevel);
+            console.log("this is user level");
             const waitingCount = await client.lLen('waitingUsers');
             if (waitingCount > 0) {
                 console.log("there is a user in the pop-------------");
