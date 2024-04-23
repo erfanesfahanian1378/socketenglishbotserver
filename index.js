@@ -2,12 +2,67 @@ const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const mongoose = require('mongoose');
+const { Kafka } = require('kafkajs');
 
 
 
 // Create a new express application
 const app = express();
 let waitingUsers = [];
+
+const kafka = new Kafka({
+    clientId: 'my-app',
+    brokers: ['localhost:9092', 'localhost:9093', 'localhost:9094'],
+    ssl: null,
+    sasl: null
+});
+
+// const producer = kafka.producer();
+const producer = kafka.producer({
+    retries: {
+        initialRetryTime: 300,
+        retries: 10
+    }
+});
+//for fault tolerance
+// const producer = kafka.producer({acks: 'all'});
+
+
+async function sendMessageToKafka(senderIdChat, receiverIdChat, content) {
+    await producer.connect();
+    await producer.send({
+        topic: 'chat-messages',
+        messages: [
+            { value: JSON.stringify({
+                    firstUserId: senderIdChat,
+                    secondUserId: receiverIdChat,
+                    content: content,
+                    date: Date.now()
+                })
+            },
+        ],
+    });
+    await producer.disconnect();
+}
+
+async function chatPartners(senderIdChat, receiverIdChat, content) {
+    await producer.connect();
+    await producer.send({
+        topic: 'chat-messages',
+        messages: [
+            { value: JSON.stringify({
+                    firstUserId: senderIdChat,
+                    secondUserId: receiverIdChat,
+                    content: content,
+                    date: Date.now()
+                })
+            },
+        ],
+    });
+    await producer.disconnect();
+}
+
+
 
 // Create an HTTP server and wrap the Express app
 const server = http.createServer(app);
@@ -116,13 +171,14 @@ io.on('connection', (socket) => {
         // Retrieve the sender's chat partner from Redis
         const sessionKey = `chatSession:${senderIdChat}`;
         const receiverIdChat = await client.get(sessionKey);
-        const chatMessage = new ChatMessages({
-            firstUserId: senderIdChat,
-            secondUserId: receiverIdChat,
-            content: content,
-            data: Date.now()
-        });
-        chatMessage.save();
+        await sendMessageToKafka(senderIdChat, receiverIdChat, content)
+        // const chatMessage = new ChatMessages({
+        //     firstUserId: senderIdChat,
+        //     secondUserId: receiverIdChat,
+        //     content: content,
+        //     data: Date.now()
+        // });
+        // chatMessage.save();
         if (receiverIdChat) {
             // Retrieve the receiver's socket ID from the mapping
             const receiverSocketId = idChatToSocketMap[receiverIdChat];
